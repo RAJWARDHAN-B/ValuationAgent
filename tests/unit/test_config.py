@@ -28,6 +28,20 @@ def test_unknown_key_rejected(tmp_path: Path) -> None:
         load_defaults(tmp_path)
 
 
+@pytest.mark.parametrize(
+    ("old", "new", "error"),
+    [
+        ("terminal_growth: 0.025", "terminal_growth: 0.05", "terminal_growth"),
+        ("statutory_tax_rate: 0.21", "statutory_tax_rate: 0.4", "statutory_tax_rate"),
+    ],
+)
+def test_related_valuation_bounds_rejected(tmp_path: Path, old: str, new: str, error: str) -> None:
+    text = (CONFIG_DIR / "defaults.yaml").read_text().replace(old, new)
+    (tmp_path / "defaults.yaml").write_text(text)
+    with pytest.raises(ConfigError, match=error):
+        load_defaults(tmp_path)
+
+
 def test_settings_read_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("SEC_USER_AGENT", "Jane Doe jane@example.com")
     monkeypatch.setenv("IB_AGENT_CACHE_DIR", str(tmp_path))

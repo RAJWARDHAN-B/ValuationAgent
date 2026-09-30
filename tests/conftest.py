@@ -18,6 +18,20 @@ ACME_10K_URL = "https://www.sec.gov/Archives/edgar/data/1/000000000125000005/acm
 ACME_10Q_URL = "https://www.sec.gov/Archives/edgar/data/1/000000000125000012/acme-20250331.htm"
 
 
+@pytest.fixture(autouse=True)
+def block_network_for_offline_tests(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if request.node.get_closest_marker("live") is not None:
+        return
+
+    def deny_connection(*args: object, **kwargs: object) -> None:
+        pytest.fail("Network access is disabled; mark this test 'live' to opt in")
+
+    monkeypatch.setattr("socket.socket.connect", deny_connection)
+    monkeypatch.setattr("socket.socket.connect_ex", deny_connection)
+
+
 def default_routes() -> dict[str, httpx.Response]:
     def ok(name: str) -> httpx.Response:
         return httpx.Response(200, content=(EDGAR_FIXTURES / name).read_bytes())

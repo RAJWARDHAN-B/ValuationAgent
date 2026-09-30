@@ -1,7 +1,7 @@
 T ?= MSFT
 COMPOSE := docker compose
 
-.PHONY: build test lint fmt analyze fetch shell
+.PHONY: build test lint fmt analyze fetch local-llm shell
 
 build:
 	$(COMPOSE) build
@@ -20,6 +20,9 @@ analyze:
 
 fetch:
 	$(COMPOSE) run --rm analyst fetch $(T)
+
+local-llm:
+	$(COMPOSE) --profile local-llm up -d ollama
 
 shell:
 	$(COMPOSE) run --rm --entrypoint bash analyst

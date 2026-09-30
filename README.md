@@ -1,8 +1,8 @@
 # IB Analyst Agent
 
-> **Status: planning.** No code has been written yet. The design and milestones are in [implementation.md](implementation.md). Commands below show the planned interface.
+> **Status (2026-09-30): early development.** The project setup and SEC EDGAR research path are implemented. `ib-agent fetch` resolves a ticker, screens financial-sector companies, retrieves company facts and recent filings, and caches responses. Statement extraction, valuation, Excel, deck, and API generation are planned but not implemented yet. See [implementation.md](implementation.md) for the verified status and phased plan.
 
-Give the agent a ticker. It returns what a junior investment banking analyst would spend a weekend building:
+The planned end state is a ticker-in, valuation package producing what a junior investment banking analyst would spend a weekend building:
 
 - **`model.xlsx`**: a live-formula DCF model (Inputs → Historicals → Forecast → WACC → DCF → Sensitivity → Comps → Checks).
 - **`deck.pptx` / `deck.pdf`**: a preliminary valuation pitch deck with a football field, sensitivity tables, trading comps, and cited commentary.
@@ -38,33 +38,43 @@ flowchart LR
 - **LLM-optional:** OpenAI, Anthropic, or a local Ollama model. `--no-llm` still produces the full model and deck.
 - **Fully containerized:** Python, LibreOffice, and fonts are all inside Docker.
 
-## Quickstart (planned)
+## Working Quickstart
 
-Prerequisites: Docker Desktop (or Docker Engine + Compose v2).
+Prerequisites: Docker Desktop (or Docker Engine + Compose v2), plus a valid SEC contact name and email for the required User-Agent.
 
 ```bash
-cd ib
-cp .env.example .env          # set SEC_USER_AGENT and, optionally, an LLM provider
-make build                    # or: docker compose build
+cp .env.example .env
+# Edit .env and set SEC_USER_AGENT to "Your Name your@email.com".
+make build
 
-# Full run
-docker compose run --rm analyst analyze MSFT
+# Fetch SEC research data
+make fetch T=MSFT
 
-# Deterministic run, no LLM
-docker compose run --rm analyst analyze MSFT --no-llm
+# A repeat uses cached responses
+make fetch T=MSFT
 
-# Specify peers and pause to review assumptions
-docker compose run --rm analyst analyze MSFT --peers AAPL,GOOGL,ORCL,CRM --review
-
-# Local LLM via Ollama
-docker compose --profile local-llm up -d ollama
-LLM_PROVIDER=ollama docker compose run --rm analyst analyze MSFT
-
-# Tests (network disabled inside the container)
+# Tests and lint run in the Python 3.12 container
 make test
+make lint
 ```
 
-Artifacts are written to `ib/outputs/{TICKER}/{timestamp}/` on the host.
+The current CLI commands are `ib-agent --help`, `ib-agent version`, and `ib-agent fetch TICKER [--refresh]`. `fetch` requires `SEC_USER_AGENT`; `--refresh` bypasses cached metadata.
+
+### Optional Local Python Setup
+
+The project requires Python 3.12 or newer; the Docker workflow avoids depending on the host Python installation.
+
+```bash
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[dev]"
+ib-agent --help
+pytest
+```
+
+Pytest blocks socket connections by default. Network-dependent tests must be explicitly marked `live`.
+
+The local Ollama service can be started with `make local-llm` or `docker compose --profile local-llm up -d ollama`. The provider integration is planned for a later phase and is not used by the current `fetch` command.
 
 ## Configuration
 
@@ -79,11 +89,19 @@ Artifacts are written to `ib/outputs/{TICKER}/{timestamp}/` on the host.
 
 Valuation defaults (ERP, terminal growth bounds, forecast horizon, tax fallback) live in `config/defaults.yaml`. XBRL tag mappings live in `config/xbrl_tag_map.yaml`.
 
-## CLI (planned)
+## CLI
+
+Implemented:
+
+```
+ib-agent version
+ib-agent fetch TICKER [--refresh]
+```
+
+Planned:
 
 ```
 ib-agent analyze TICKER [--peers A,B,C] [--review] [--no-llm] [--valuation-date YYYY-MM-DD]
-ib-agent fetch   TICKER                     # download + cache data
 ib-agent extract TICKER                     # statements + QA report
 ib-agent value   TICKER --assumptions FILE  # valuation from edited assumptions
 ib-agent build   RUN_DIR                    # rebuild Excel / PPTX / PDF
@@ -93,7 +111,7 @@ ib-agent verify  RUN_DIR                    # re-run parity and review checks
 ## Project Layout (planned)
 
 ```
-ib/
+ValuationAgent/
 ├── Dockerfile · docker-compose.yml · Makefile · pyproject.toml
 ├── config/            # defaults, XBRL tag map, curated peers
 ├── src/ib_agent/
@@ -116,7 +134,7 @@ ib/
 
 ## Roadmap
 
-M0 scaffolding + Docker → M1 EDGAR → M2 extraction + QA → M3 WACC → M4 DCF → M5 Excel + parity → M6 comps → M7 LLM layer → M8 orchestrator → M9 deck + PDF → M10 review agent → M11 API + polish. Details and completion criteria are in [implementation.md](implementation.md#15-milestones).
+M0 scaffolding + Docker → M1 EDGAR → M2 extraction + QA → M3 WACC → M4 DCF → M5 Excel + parity → M6 comps → M7 LLM layer → M8 orchestrator → M9 deck + PDF → M10 review agent → M11 API + polish. Details and completion criteria are in [implementation.md](implementation.md#15-phased-implementation-plan).
 
 ## Disclaimer
 

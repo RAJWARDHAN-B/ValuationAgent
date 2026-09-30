@@ -30,5 +30,12 @@ services:
       - ./config:/app/config
       - ./pyproject.toml:/app/pyproject.toml:ro
 
+  ollama:
+    image: ollama/ollama:latest
+    profiles: [local-llm]
+    volumes:
+      - ollama_models:/root/.ollama
+
 volumes:
   ib_cache:
+  ollama_models:

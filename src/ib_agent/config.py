@@ -8,7 +8,15 @@ from pathlib import Path
 from typing import Literal
 
 import yaml
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, SecretStr, ValidationError
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    ValidationError,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from ib_agent.errors import ConfigError
@@ -71,6 +79,14 @@ class ValuationDefaults(BaseModel):
     statutory_tax_rate: float = Field(ge=0, lt=1)
     max_tax_rate: float = Field(gt=0, lt=1)
     mid_year_convention: bool
+
+    @model_validator(mode="after")
+    def validate_related_bounds(self) -> ValuationDefaults:
+        if self.terminal_growth > self.max_terminal_growth:
+            raise ValueError("terminal_growth must be <= max_terminal_growth")
+        if self.statutory_tax_rate > self.max_tax_rate:
+            raise ValueError("statutory_tax_rate must be <= max_tax_rate")
+        return self
 
 
 class Defaults(BaseModel):

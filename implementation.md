@@ -2,7 +2,41 @@
 
 Give the agent a US public company ticker. It pulls the company's SEC filings and market data, pulls out and checks the three financial statements, builds a DCF model in Excel with live formulas, runs trading comps, writes cited commentary, and produces a pitch deck as PPTX and PDF. The deck gets the kind of review a VP would give before it goes to a client.
 
-The project lives in `ib/` for now and will move to its own repository later. So `ib/` must be fully self-contained: its own `pyproject.toml`, Docker setup, tests, and docs. It must not import anything from the parent backtester project.
+The project lives in its own repository (`ValuationAgent/`) and is fully self-contained: its own `pyproject.toml`, Docker setup, tests, and docs. Older notes that refer to an `ib/` folder mean the repository root.
+
+---
+
+## 0. Current Status (as of 2026-09-30)
+
+**Summary:** Phase 0 (scaffolding) and Phase 1 (EDGAR + research) are complete, except Phase 1 still needs a real-company fixture. Nothing from Phase 2 onward exists yet. The CLI has two commands: `version` and `fetch`. The detailed phase plan is in [§15](#15-phased-implementation-plan).
+
+### 0.1 What Exists
+
+| Area | Status | Location | Notes |
+|---|---|---|---|
+| Packaging and tooling | Done | `pyproject.toml` | Python ≥3.12; deps: `httpx`, `pydantic` v2, `pydantic-settings`, `pyyaml`, `tenacity`, `typer`. `ruff`, `mypy` (pydantic plugin), `pytest` with a `live` marker excluded by default |
+| Docker | Done for current phases | `Dockerfile`, `docker-compose.yml` | Multi-stage (`base` → `builder` → `runtime` → `dev`), non-root `analyst`, LibreOffice Calc + Impress, Liberation/DejaVu fonts. Services: `analyst`, `tests` (`network_mode: none`), `ollama` (`local-llm` profile). API service is deferred to Phase 11 |
+| Makefile | Partial | `Makefile` | `build`, `test`, `lint`, `fmt`, `fetch`, `local-llm`, `shell`. `analyze` calls a CLI command not implemented until Phase 8 |
+| Settings and defaults | Done | `src/ib_agent/config.py`, `config/defaults.yaml` | Env settings (`SEC_USER_AGENT`, LLM vars, dirs). `edgar` and `valuation` YAML sections with field and cross-field bounds; unknown keys rejected |
+| Errors | Done | `src/ib_agent/errors.py` | `IBAgentError` hierarchy: config, ticker, EDGAR, unsupported company, filing not found |
+| HTTP cache | Done | `src/ib_agent/data/cache.py` | SHA-256-keyed file cache, TTL per call, atomic writes |
+| Rate limiter | Done | `src/ib_agent/data/rate_limit.py` | Minimum-interval limiter (default 5 req/s). Not a token bucket; acceptable at SEC volumes |
+| EDGAR client | Done | `src/ib_agent/data/edgar.py` | Mandatory User-Agent, host allow-list (`www.sec.gov`, `data.sec.gov`, HTTPS only), retries on 429/5xx/transport errors with jittered backoff, 24 h metadata TTL, filing documents cached forever, `SourceRecord` per retrieval |
+| Ticker resolution | Done | `src/ib_agent/data/tickers.py` | Regex validation, `BRK.B` → `BRK-B` handling |
+| Company models | Done | `src/ib_agent/models/company.py`, `models/sources.py` | `CompanyRef`, `FilingRef`, `CompanyProfile` (SIC 6000–6799 detection), `parse_submissions` |
+| Research agent | Done | `src/ib_agent/agents/research.py` | Ticker → CIK → submissions → refuse financials → latest 10-K (10-K/A excluded) + newer 10-Q → company facts → download filing HTML (downloaded, not parsed) |
+| CLI | Partial | `src/ib_agent/cli.py` | `version`, `fetch TICKER [--refresh]` |
+| Tests | Done for current scope | `tests/` | 8 unit files + 1 integration file covering cache, CLI, company parsing, config, EDGAR client, network guard, rate limiter, tickers, research flow. `FakeSEC` over `httpx.MockTransport`; socket connections blocked unless marked `live` |
+| Extraction, market data, rates, valuation, comps, LLM, orchestrator, Excel, deck, PDF, review, API | Not started | — | No `extraction/`, `valuation/`, `llm/`, `outputs/`, or `api/` packages |
+| `config/xbrl_tag_map.yaml`, `config/peers.yaml` | Not started | — | |
+| CI | Done | `.github/workflows/ci.yml` | Python 3.12; Ruff lint/format, mypy, and pytest |
+
+### 0.2 Known Gaps and Debt to Carry Forward
+
+1. **Fixture company is synthetic.** `companyfacts_CIK0000000001.json` has only a shares fact and one annual `Revenues` fact, and the 10-K/10-Q HTML fixtures are placeholders. Phase 2 needs a real, trimmed fixture company. (Phase 1.)
+2. **HTTP client is SEC-only.** `EdgarClient` hard-codes the SEC host allow-list, so Treasury / FRED / market data need a generalized cached client. (Phase 3.)
+3. **Research output isn't persisted.** `ResearchResult` lives in memory; there is no run directory yet. (Phase 8.)
+4. **Host Python is 3.9.** Use Docker or install Python 3.12 for the documented local setup.
 
 ---
 
@@ -108,7 +142,7 @@ Model names are never hard-coded. They come from `LLM_MODEL` in `.env`.
 ## 5. Repository Layout (target)
 
 ```
-ib/
+ValuationAgent/
 ├── README.md
 ├── implementation.md
 ├── pyproject.toml
@@ -246,7 +280,7 @@ Endpoints (all free, JSON unless noted):
 Client rules:
 
 - Send the `User-Agent` header from `SEC_USER_AGENT`. Refuse to run without it.
-- Token-bucket rate limiter, at most **10 requests/second** (SEC limit). Default 5 req/s.
+- Rate limiter (minimum interval between requests), at most **10 requests/second** (SEC limit). Default 5 req/s.
 - Retry on 429/5xx with exponential backoff and jitter (`tenacity`). Timeout 30 s.
 - Cache responses on disk keyed by URL. TTL is 1 day for submissions and company facts, forever for archived filing documents (they don't change).
 - Validate tickers with `^[A-Z][A-Z0-9.\-]{0,9}$` before any request or path use.
@@ -528,7 +562,7 @@ With `--review`, the run writes `assumptions.yaml`, prints a summary table, and 
 | Unit: QA | Each check passes and fails | Synthetic statements |
 | Unit: guardrails | Number extraction/matching, citation validation, injection text passed through as data | Crafted strings |
 | Unit: filings | Section splitter picks body not TOC | Trimmed real 10-K HTML fixture |
-| Integration | Full pipeline on one fixture company with `FakeProvider` and recorded HTTP | `respx` / cached fixtures; no network |
+| Integration | Full pipeline on one fixture company with `FakeProvider` and recorded HTTP | `httpx.MockTransport` (`FakeSEC` in `conftest.py`) / cached fixtures; no network |
 | Parity | Excel formulas vs Python engine | LibreOffice recalc (runs in the Docker `tests` service) |
 | Golden | Fixture company's EV, per-share value, and deck text | Stored expected values; diff on change |
 | Live (opt-in) | Real EDGAR + market data for 3 tickers | `pytest -m live`; excluded by default |
@@ -539,63 +573,480 @@ Suggested fixture company: a stable non-financial large-cap with clean XBRL, e.g
 
 ---
 
-## 15. Milestones
+## 15. Phased Implementation Plan
 
-Each milestone ends with passing tests in Docker (`make test`) and a short demo command.
+Phases map one-to-one to the README roadmap (Phase N = MN). Every phase ends with `make test` and `make lint` passing in Docker, plus a demo command. Tick the boxes as work lands.
 
-### M0 — Scaffolding and Docker
-- `pyproject.toml` (package `ib_agent`, console script `ib-agent`), `src/` layout, `ruff` / `mypy` / `pytest` configuration.
-- `Dockerfile` (multi-stage, non-root, LibreOffice), `docker-compose.yml` (`analyst`, `tests`), `.dockerignore`, `.env.example`, `Makefile`.
-- `config.py` loads env + `config/defaults.yaml`. `ib-agent --help` works in the container.
-- **Done when:** `make build && make test` passes with a smoke test; `docker compose run --rm analyst --help` prints usage.
+**Rules for every phase**
 
-### M1 — EDGAR Client and Research Agent
-- Rate-limited, cached, retrying client. Ticker → CIK. Submissions (SIC, FYE, filing index). Company facts. Latest 10-K / 10-Q document download.
-- Record fixtures for the chosen fixture company.
-- **Done when:** `ib-agent fetch TICKER` populates the cache; a second call makes no HTTP requests; the SIC exclusion works.
+- Add new dependencies to `pyproject.toml` in the phase that first needs them. Nothing speculative.
+- Every new public function gets a unit test. Math gets a hand-worked example.
+- Tests never touch the network. New external sources get a recorded, trimmed fixture.
+- `mypy --strict` applies to `ib_agent.valuation.*` from Phase 3 onward.
+- Update the README feature list when a phase's exit criteria are met.
 
-### M2 — Statement Extraction and QA
-- Tag map, tidy facts, FY and LTM statements, derived items, QA report. CSV export for inspection.
-- **Done when:** `ib-agent extract TICKER` prints 3–5 years of IS/BS/CF matching the 10-K for the fixture company (spot-check 10 line items by hand); all QA checks unit-tested.
+### 15.0 Overview
 
-### M3 — Market Data, Rates, Beta, WACC
-- Price, 52-week range, shares (XBRL-first), Treasury 10Y, beta regression + Blume, cost of debt, WACC.
-- **Done when:** the WACC build is unit-tested by hand and shows up in `extract` output.
+| Phase | Scope | Status | Demo command |
+|---|---|---|---|
+| 0 | Scaffolding + Docker | Mostly done | `docker compose run --rm analyst --help` |
+| 1 | EDGAR client + Research agent | Done (fixture gap) | `ib-agent fetch MSFT` |
+| 2 | Statement extraction + QA | Not started | `ib-agent extract MSFT` |
+| 3 | Market data, rates, beta, WACC | Not started | `ib-agent extract MSFT` (adds market + WACC section) |
+| 4 | Assumptions, forecast, DCF, sensitivities | Not started | `ib-agent value MSFT` |
+| 5 | Excel model + LibreOffice parity | Not started | `ib-agent value MSFT` (also writes `model.xlsx`) |
+| 6 | Trading comps | Not started | `ib-agent value MSFT --peers AAPL,ORCL,CRM` |
+| 7 | LLM layer + 10-K sections | Not started | `pytest tests/unit/llm` + one manual live call per provider |
+| 8 | Orchestrator, manifest, human review | Not started | `ib-agent analyze MSFT --no-llm` |
+| 9 | Pitch deck + PDF | Not started | `ib-agent analyze MSFT` |
+| 10 | Review agent | Not started | `ib-agent verify outputs/MSFT/<run_id>` |
+| 11 | API + polish (optional) | Not started | `docker compose --profile api up` |
 
-### M4 — DCF Engine and Sensitivities
-- Baseline forecast, UFCF, both TV methods, mid-year convention, equity bridge, cross-check implied metrics, sensitivity grids, sanity flags.
-- `assumptions.yaml` round-trip (dump / load / validate with bounds).
-- **Done when:** hand-checked DCF tests pass; `ib-agent value TICKER` prints the valuation summary.
+```mermaid
+flowchart LR
+    P0[P0 Scaffolding] --> P1[P1 EDGAR]
+    P1 --> P2[P2 Extraction + QA]
+    P2 --> P3[P3 Market + WACC]
+    P3 --> P4[P4 DCF]
+    P4 --> P5[P5 Excel + parity]
+    P2 --> P6[P6 Comps]
+    P3 --> P6
+    P1 --> P7[P7 LLM + sections]
+    P5 --> P8[P8 Orchestrator]
+    P6 --> P8
+    P7 --> P8
+    P8 --> P9[P9 Deck + PDF]
+    P9 --> P10[P10 Review]
+    P10 --> P11[P11 API]
+```
 
-### M5 — Excel Model Builder and Parity
-- All sheets from §12.1 with named ranges, styles, and formulas. LibreOffice recalc and parity check.
-- **Done when:** the parity test passes inside Docker; changing `WACC` in Excel updates the per-share value and sensitivities; the Checks sheet master cell is TRUE for the fixture company.
+Phase 7 only depends on Phase 1, so it can run in parallel with Phases 2–6.
 
-### M6 — Trading Comps
-- Peer resolution (user / curated), multiples, statistics, implied range. Comps sheet in Excel. Exit multiple default from the peer median.
-- **Done when:** the comps table matches hand calculations for fixtures; "n.m." handling tested.
+---
 
-### M7 — LLM Layer and Filing Sections
-- Provider interface + OpenAI / Anthropic / Ollama / Fake. 10-K section splitter and chunking. Prompts for overview, risks, MD&A, assumption adjustments, peer suggestions. Guardrails (numbers, citations, budget).
-- `ollama` compose profile.
-- **Done when:** all LLM tasks run with `FakeProvider` in tests; one live run per real provider done manually; guardrail tests cover injection text and made-up numbers.
+### Phase 0 — Scaffolding and Docker
 
-### M8 — Orchestrator, Manifest, Human Review
-- `RunState`, step registry, caching / `--from-step`, run manifest, `--review` flow, `--no-llm` mode.
-- **Done when:** `ib-agent analyze TICKER --no-llm` produces `model.xlsx` + `run_manifest.json` end to end from fixtures; the integration test passes offline.
+**Status:** complete. **Goal:** a reproducible container that builds, tests, and lints.
 
-### M9 — Pitch Deck and PDF
-- Template, slide builders, native charts (financials, bridge, football field), tables, citations in footnotes. LibreOffice PDF conversion.
-- **Done when:** `analyze` produces `deck.pptx` and `deck.pdf`; the snapshot test checks slide count and key strings; the deck is reviewed visually for 3 tickers.
+Done:
 
-### M10 — Review Agent
-- Deterministic review (sanity flags, QA, parity, deck-number vs model-number consistency) + LLM VP review. `review_report.md` in the run folder, summarized in the appendix.
-- **Done when:** seeded inconsistencies (e.g. a wrong number in slide text) are caught in tests.
+- [x] `pyproject.toml`: package `ib_agent`, console script `ib-agent`, `src/` layout, `ruff` / `mypy` / `pytest` config, `live` marker excluded by default.
+- [x] Multi-stage `Dockerfile` with non-root `analyst`, LibreOffice Calc + Impress, Liberation/DejaVu fonts.
+- [x] `docker-compose.yml` with `analyst` and `tests` (`network_mode: none`), `./outputs` bind mount, `ib_cache` volume.
+- [x] `.env.example`, `.gitignore`, `.dockerignore`.
+- [x] `config.py` (env + `defaults.yaml`), `errors.py`, `ib-agent --help`, `ib-agent version`.
+- [x] Compose `ollama` service and persistent model volume under the `local-llm` profile.
+- [x] `make local-llm` starts the optional Ollama service.
+- [x] CI workflow runs lint, type-check, and offline tests on Python 3.12.
+- [x] Offline socket guard for tests outside Docker.
+- [x] Cross-field validation for terminal growth and tax-rate bounds.
+- [x] README describes the implemented `fetch` path and local Python setup.
 
-### M11 — API and Polish (optional)
-- FastAPI: `POST /runs {ticker, peers, options}` → run ID; `GET /runs/{id}` status; `GET /runs/{id}/artifacts/{name}` download with an allow-list of artifact names. `api` compose profile.
-- Demo runs on 3 diverse tickers (e.g. software, consumer, industrial) stored as sample outputs. Final README with screenshots.
-- **Done when:** the API works in Docker; README quickstart verified from a clean clone.
+Deferred to later phases:
+
+- `extract` and `value` Make targets are added with their CLI commands in Phases 2 and 4; `analyze` is added in Phase 8.
+- The API Compose service is added with the API implementation in Phase 11.
+
+**Exit criteria:** `make build && make test && make lint` pass; `docker compose --profile local-llm config` validates; CI is configured with these gates (a remote workflow run is verified by GitHub after push).
+
+---
+
+### Phase 1 — EDGAR Client and Research Agent
+
+**Status:** done, except for a real fixture company. **Goal:** ticker in, cached SEC data out.
+
+Done:
+
+- [x] `FileCache` with per-call TTL and atomic writes.
+- [x] `RateLimiter` (default 5 req/s, configurable up to 10).
+- [x] `EdgarClient`: mandatory User-Agent, SEC host allow-list, retries with jittered backoff, metadata TTL 24 h, filing documents cached forever, `--refresh` bypasses metadata cache.
+- [x] Ticker normalization and ticker → CIK resolution (dot share classes).
+- [x] `parse_submissions` → `CompanyProfile` with SIC and filing index.
+- [x] `run_research`: refuses SIC 6000–6799, picks latest 10-K and a newer 10-Q, fetches company facts and filing HTML.
+- [x] `ib-agent fetch TICKER [--refresh]` prints profile, filings, concept count, HTTP requests, and cache hits.
+- [x] Unit and integration tests, including "second run makes zero HTTP requests".
+
+Remaining:
+
+- [ ] Pick the fixture company: a stable, non-financial large-cap with clean US-GAAP XBRL (consumer or industrial).
+- [ ] Add `scripts/record_fixtures.py` (live only, uses the real `SEC_USER_AGENT`). It downloads submissions, company facts, and the latest 10-K / 10-Q HTML, then trims:
+  - company facts to the tags listed in `config/xbrl_tag_map.yaml` (at least 5 fiscal years plus the current and prior-year YTD 10-Q periods), plus `dei:EntityCommonStockSharesOutstanding`;
+  - 10-K HTML to the Item 1, 1A, 7, 7A, and 8 regions, keeping the table of contents so the splitter's TOC skip is tested.
+- [ ] Save under `tests/fixtures/edgar/<ticker>/` and register the routes in `FakeSEC`. Keep the synthetic ACME / BNK fixtures for edge cases.
+- [ ] Add `tests/live/test_edgar_live.py` (`-m live`) that fetches 3 real tickers.
+- [ ] Document the 10-K/A policy: amendments are ignored for document selection. Restated numbers still arrive through company facts (latest `filed` wins in Phase 2).
+
+**Exit criteria:** the recorded fixture company runs through `fetch` offline; the fixture is under ~1 MB.
+
+---
+
+### Phase 2 — Financial Statement Extraction and QA
+
+**Status:** not started. **Goal:** company facts → normalized IS / BS / CF for up to 5 fiscal years plus LTM, each value traceable to a tag and accession number, gated by QA.
+
+New files:
+
+| File | Contents |
+|---|---|
+| `config/xbrl_tag_map.yaml` | Canonical line item → `statement` (`IS`/`BS`/`CF`), `period_type` (`duration`/`instant`), `unit` (`USD`/`shares`/`USD/shares`), `sign` (`as_reported`/`outflow_positive`), ordered candidate tags, optional `sum_of` fallback |
+| `src/ib_agent/models/financials.py` | `Fact`, `Period(label, start, end, kind: FY \| LTM \| YTD \| Q)`, `LineItemValue(value, tag, accession, form, filed, period)`, `Statement`, `FinancialStatements`, `DerivedMetrics` |
+| `src/ib_agent/models/qa.py` | `QACheck(id, severity: fail \| warn, status: pass \| warn \| fail, message, values)`, `QAReport(checks, passed)` |
+| `src/ib_agent/extraction/xbrl.py` | `load_tag_map(path)`, `tidy_facts(company_facts) -> list[Fact]` for the `us-gaap` and `dei` namespaces |
+| `src/ib_agent/extraction/statements.py` | `build_statements(facts, tag_map, *, history_years) -> FinancialStatements`, LTM roll-forward, derived items |
+| `src/ib_agent/extraction/checks.py` | One function per QA check in §8.3; `run_qa(statements, profile, *, as_of) -> QAReport` |
+| `src/ib_agent/agents/extraction.py` | `run_extraction(research, defaults, tag_map) -> ExtractionResult(statements, qa)` |
+
+Tasks:
+
+- [ ] Write the tag map for every canonical item in §8.1. Add `sum_of` fallbacks where companies split items (e.g. total debt = `LongTermDebtCurrent` + `LongTermDebtNoncurrent`; gross profit = revenue − cost of revenue).
+- [ ] `tidy_facts`: flatten `facts[ns][tag]["units"][unit]` into `Fact` rows (`tag, unit, value, start, end, fy, fp, form, filed, accn, frame`). Skip units not in the map.
+- [ ] Label fiscal periods by the fact's **`end` date**, not by the `fy` field. `fy` is the fiscal year of the *filing*, so comparative-period facts repeat under later `fy` values.
+- [ ] Period filters: FY duration 355–375 days from `10-K` / `10-K/A`; YTD durations of ~90 / ~180 / ~270 days from `10-Q`; instants matched on `end`.
+- [ ] Deduplicate by `(tag, unit, start, end)` and keep the latest `filed`, so restatements win.
+- [ ] Tag fallback per period: the first tag with a value for that period wins, and the winning tag is recorded on the `LineItemValue`.
+- [ ] LTM = latest FY + current YTD − prior-year YTD for duration items; latest 10-Q instant for balance sheet items. If no 10-Q is newer than the 10-K, LTM = latest FY.
+- [ ] Sign normalization: capex, acquisitions, dividends, and buybacks stored as positive outflows everywhere.
+- [ ] Derived items: EBITDA, total debt, net debt, NWC (excluding cash and debt), historical UFCF, effective tax rate.
+- [ ] Keep raw USD internally. Add a display helper for $mm formatting.
+- [ ] QA checks per §8.3 (BS balance, gross profit tie, EBITDA ≥ EBIT, CF tie, required items, ≥3 years of history, sign conventions, sector eligibility, stale data).
+- [ ] CLI: `ib-agent extract TICKER [--csv DIR] [--refresh]` prints IS / BS / CF in $mm and the QA table. Exit code 2 when any `fail` check fails.
+- [ ] Dependencies: `pandas` for CSV export and tabular display only; core extraction stays in plain Python / Pydantic.
+
+Tests:
+
+- [ ] `tidy_facts` on a synthetic payload with mixed units and namespaces.
+- [ ] Tag fallback, including a period where the primary tag is missing.
+- [ ] Restatement: two facts for the same period, the later `filed` wins.
+- [ ] The `fy` trap: a comparative fact filed under a later `fy` lands in the right period.
+- [ ] Duration filter drops quarterly facts from FY.
+- [ ] LTM roll-forward worked by hand.
+- [ ] Each QA check: one pass case, one fail case.
+- [ ] Integration: fixture company end to end. Hard-code 10 line items from its 10-K and assert equality.
+
+**Exit criteria:** `ib-agent extract <fixture>` prints 3–5 years of IS / BS / CF matching the 10-K on the 10 spot-checked items; all QA checks pass for the fixture company.
+
+---
+
+### Phase 3 — Market Data, Risk-Free Rate, Beta, WACC
+
+**Status:** not started. **Goal:** everything needed for the discount rate, with sources recorded.
+
+New and changed files:
+
+| File | Contents |
+|---|---|
+| `src/ib_agent/data/http.py` | `CachedHttpClient(allowed_hosts, cache, rate_limiter, ...)` extracted from `EdgarClient`. `EdgarClient` becomes a thin wrapper with the SEC allow-list. Existing EDGAR tests must keep passing |
+| `src/ib_agent/data/market.py` | `MarketDataProvider` protocol: `quote(ticker) -> Quote`, `price_history(ticker, start, end, interval) -> list[PricePoint]`, `reference_beta(ticker) -> float \| None`. `YFinanceProvider` (disk-cached, 1-day TTL), `FixtureMarketProvider` for tests, `ManualOverrides(price, beta, shares)` |
+| `src/ib_agent/data/rates.py` | `RiskFreeProvider` protocol. `TreasuryYieldCurveProvider` (10Y par yield on or before the valuation date) and `FredProvider` (`DGS10`, used when `FRED_API_KEY` is set). Returns `RateQuote(value, as_of, source_url)` |
+| `src/ib_agent/models/market.py` | `Quote`, `PricePoint`, `RateQuote`, `SharesCount(basic, diluted, method, source)` |
+| `src/ib_agent/extraction/shares.py` | Shares: `dei:EntityCommonStockSharesOutstanding` first, yfinance fallback. Diluted: treasury stock method when option/RSU tags exist, else weighted diluted shares flagged as approximate |
+| `src/ib_agent/valuation/beta.py` | `regress_beta(asset_returns, market_returns) -> BetaResult(raw, adjusted, r_squared, n_obs, frequency)`, `blume_adjust`, `unlever`, `relever` (Hamada) |
+| `src/ib_agent/valuation/wacc.py` | `cost_of_debt(...)`, `build_wacc(inputs) -> WaccBuild` with every intermediate value |
+| `config/defaults.yaml` | New keys: `beta.frequency` (`monthly`), `beta.lookback_years` (5), `beta.benchmark` (`^GSPC`), `cost_of_debt.max_spread` (0.08), `cost_of_debt.no_debt_spread` (0.015), `wacc.include_operating_leases` (false), `wacc.size_premium` (0) |
+
+Tasks:
+
+- [ ] Generalize the HTTP client without changing EDGAR behavior.
+- [ ] Market provider behind the interface; yfinance is never imported outside `market.py`.
+- [ ] Treasury 10Y lookup with weekend / holiday fallback to the prior business day. Pin the exact CSV endpoint in `rates.py` and record a fixture.
+- [ ] Beta: monthly (default) or weekly returns, aligned dates, OLS slope, Blume adjustment `0.67 β + 0.33`. yfinance beta shown only as a cross-check.
+- [ ] Cost of debt: interest expense / average total debt, clipped to `[r_f, r_f + max_spread]`. Near-zero debt uses `r_f + no_debt_spread`.
+- [ ] Weights: market equity (price × diluted shares) and book debt (optionally plus operating leases).
+- [ ] CLI: `extract` gains a "Market and WACC" section. Add `--price`, `--beta`, and `--valuation-date` overrides.
+- [ ] Turn on `mypy --strict` for `ib_agent.valuation.*` in `pyproject.toml`.
+- [ ] Dependencies: `numpy`, `yfinance`.
+
+Tests:
+
+- [ ] Beta on a synthetic series with a known slope (e.g. asset = 1.3 × market + noise).
+- [ ] Blume, unlever / relever round trip.
+- [ ] Cost of debt clipping (both bounds) and the zero-debt case.
+- [ ] WACC by hand on round numbers.
+- [ ] Treasury CSV parsing from a fixture, including a holiday date.
+- [ ] Shares fallback order and the approximation flag.
+- [ ] `YFinanceProvider` tested with a monkeypatched download and recorded CSV (no network).
+
+**Exit criteria:** the WACC build is hand-checked in tests and printed by `extract`, with the source and as-of date for price, rate, and beta.
+
+---
+
+### Phase 4 — Assumptions, Forecast, DCF, Sensitivities
+
+**Status:** not started. **Goal:** a deterministic, hand-checked DCF with an editable assumptions file.
+
+New files:
+
+| File | Contents |
+|---|---|
+| `src/ib_agent/models/assumptions.py` | `AssumptionValue(value, source: baseline \| llm \| user, rationale, citation)`; `Assumptions` with per-field bounds from config and a validator that rejects `g ≥ WACC` and `g > max_terminal_growth` |
+| `src/ib_agent/models/valuation.py` | `ForecastYear`, `UFCFSchedule`, `TerminalValue(method, value, pv, implied_cross_check)`, `EquityBridge`, `DCFResult`, `SensitivityGrid(row_axis, col_axis, cells)`, `SanityFlag`, `ValuationResult` |
+| `src/ib_agent/valuation/forecast.py` | `baseline_assumptions(statements, defaults) -> Assumptions`, `project(statements, assumptions) -> list[ForecastYear]` |
+| `src/ib_agent/valuation/dcf.py` | `discount_factors`, `gordon_tv`, `exit_tv`, `equity_bridge`, `run_dcf(...) -> DCFResult` |
+| `src/ib_agent/valuation/sensitivity.py` | WACC × g and WACC × exit multiple grids |
+| `src/ib_agent/valuation/sanity.py` | Sanity flags from §9.7 |
+| `src/ib_agent/assumptions_io.py` | `dump_assumptions(path)` / `load_assumptions(path)` with bounds validation and readable YAML (comments show baseline values) |
+| `src/ib_agent/agents/valuation.py` | Wires statements + WACC + assumptions into `ValuationResult` |
+
+Tasks:
+
+- [ ] Baseline drivers per §9.1: revenue growth from 3-year CAGR fading linearly to `g` by year 5; 3-year average EBIT margin; clipped effective tax rate with statutory fallback; D&A and capex as % of revenue; ΔNWC as % of Δrevenue.
+- [ ] SBC treated as an expense by default, with a config flag.
+- [ ] UFCF per §9.2; mid-year discounting per §9.4 (configurable); TV discounted at year N.
+- [ ] Both TV methods, with implied exit multiple (from Gordon) and implied perpetual growth (from exit multiple).
+- [ ] Exit multiple default: `valuation.default_exit_multiple` in config until Phase 6 supplies the peer median.
+- [ ] Equity bridge per §9.5 and implied share price.
+- [ ] Sensitivity grids per §9.6; cells where `g ≥ WACC` are `None` and shown as "n.m.".
+- [ ] Sanity flags per §9.7.
+- [ ] CLI: `ib-agent value TICKER [--assumptions FILE] [--write-assumptions FILE]` prints the assumptions, UFCF schedule, both valuations, and sanity flags.
+
+Tests:
+
+- [ ] A 3-year DCF worked by hand in the test docstring (UFCF, discount factors with and without mid-year, both TVs, bridge, per-share).
+- [ ] Revenue fade hits `g` exactly in the final year.
+- [ ] Tax fallback when pretax income ≤ 0.
+- [ ] `g ≥ WACC` raises; grid marks the right cells "n.m.".
+- [ ] Implied multiple / implied growth round trip.
+- [ ] YAML round trip; out-of-bound values rejected with a clear message.
+
+**Exit criteria:** hand-checked DCF tests pass; `ib-agent value <fixture>` prints a valuation summary; editing `assumptions.yaml` and re-running changes the output.
+
+---
+
+### Phase 5 — Excel Model and Parity
+
+**Status:** not started. **Goal:** a banker-style, live-formula `model.xlsx` whose recalculated values match the Python engine to $10^{-6}$.
+
+New files:
+
+| File | Contents |
+|---|---|
+| `src/ib_agent/outputs/excel/styles.py` | Blue inputs, black formulas, green cross-sheet links; number formats `#,##0.0`, `0.0%`, `0.0x` |
+| `src/ib_agent/outputs/excel/names.py` | Registry of defined names (`WACC`, `TGR`, `ExitMultiple`, `TaxRate`, ...) so builders and parity use the same names |
+| `src/ib_agent/outputs/excel/sheets/*.py` | One module per sheet in §12.1: `cover`, `inputs`, `historicals`, `forecast`, `wacc`, `dcf`, `sensitivity`, `comps` (placeholder until Phase 6), `checks` |
+| `src/ib_agent/outputs/excel/builder.py` | `build_workbook(statements, wacc, assumptions, valuation, qa, path) -> Path` |
+| `src/ib_agent/outputs/recalc.py` | `recalc(path) -> Path` via LibreOffice headless; `read_named_values(path, names)`; `check_parity(valuation, path, rtol=1e-6) -> ParityReport` |
+
+Tasks:
+
+- [ ] Excel formulas mirror the Python exactly (same fade formula, same mid-year exponent, same TV timing).
+- [ ] Sensitivity cells are closed-form (`SUMPRODUCT` of the UFCF row and a discount-exponent row, plus the TV term), not Excel Data Tables.
+- [ ] Historicals: cell comments with tag, accession number, and period.
+- [ ] Checks sheet: BS balance, CF tie, `g < WACC`, TV % of EV, parity flag, and a master cell.
+- [ ] Freeze panes, print areas, no merged cells in calculation areas.
+- [ ] Force full recalculation in LibreOffice. By default it may not recalculate `.xlsx` files on load, so set "recalculate on load: always" in the image's LibreOffice profile or run a headless macro that calls `calculateAll()`. Use an isolated `-env:UserInstallation` profile per call.
+- [ ] Register a `libreoffice` pytest marker; those tests skip when `soffice` isn't on `PATH` and always run in the Docker `tests` service.
+- [ ] `value` writes `model.xlsx` to a temporary run folder until Phase 8 introduces run directories.
+- [ ] Dependency: `openpyxl`.
+
+Tests:
+
+- [ ] All defined names exist and point at the right cells.
+- [ ] Input cells are blue; the Forecast / WACC / DCF / Sensitivity sheets contain no hard-coded numeric constants (scan formulas).
+- [ ] Parity: EV, equity value, per-share value, and every sensitivity cell within $10^{-6}$ (LibreOffice).
+- [ ] Changing `WACC` in the workbook and recalculating changes per-share value and the grids.
+
+**Exit criteria:** parity passes inside Docker; the Checks master cell is TRUE for the fixture company.
+
+---
+
+### Phase 6 — Trading Comps
+
+**Status:** not started. **Goal:** a validated peer set, multiples table, and implied range, plus the peer-median exit multiple.
+
+New files:
+
+| File | Contents |
+|---|---|
+| `config/peers.yaml` | Optional curated peer lists by ticker |
+| `src/ib_agent/models/comps.py` | `Peer(ticker, cik, source: user \| curated \| llm, reason)`, `PeerMetrics`, `MultipleStats`, `CompsResult`, `DroppedPeer(ticker, reason)` |
+| `src/ib_agent/valuation/comps.py` | `enterprise_value`, `compute_multiples`, `summary_stats`, `implied_range` |
+| `src/ib_agent/agents/comps.py` | `resolve_peers(target, user_peers, curated, llm_candidates)`; runs research + extraction + market data per peer |
+| `src/ib_agent/outputs/excel/sheets/comps.py` | Full Comps sheet with green links into DCF inputs |
+
+Tasks:
+
+- [ ] Peer priority per §10.1: `--peers` → `peers.yaml` → LLM (from Phase 7).
+- [ ] Validation: ticker exists, has XBRL facts, not SIC 6000–6799, market cap within 0.2x–5x of the target (overridable). Dropped peers are recorded with a reason.
+- [ ] Multiples on an LTM basis: EV / Revenue, EV / EBITDA, P / E, plus revenue growth and EBITDA margin.
+- [ ] "n.m." for negative denominators or multiples above 100x; excluded from stats.
+- [ ] Percentiles use linear interpolation (matches Excel `PERCENTILE.INC`) so Python and Excel agree.
+- [ ] Implied range from the 25th–75th percentile applied to the target's LTM metrics.
+- [ ] Feed peer-median EV / EBITDA into `Assumptions.exit_multiple` (source `baseline`).
+- [ ] Fewer than 3 valid peers: warn, skip comps statistics, keep the config exit multiple.
+- [ ] A peer failure never fails the run; it becomes a `DroppedPeer`.
+- [ ] CLI: `--peers A,B,C` on `value`.
+
+Tests:
+
+- [ ] Multiples and stats by hand for 3–5 synthetic peers.
+- [ ] "n.m." rules.
+- [ ] Percentile parity with `PERCENTILE.INC` (LibreOffice parity test extended to the Comps sheet).
+- [ ] Validation drops a financial, an unknown ticker, and an out-of-band market cap.
+
+**Exit criteria:** the comps table matches hand calculations; the exit multiple default comes from the peer median; the Comps sheet passes parity.
+
+---
+
+### Phase 7 — LLM Layer and 10-K Sections
+
+**Status:** not started (can run in parallel with Phases 2–6). **Goal:** safe, schema-validated LLM tasks with citations, all testable offline.
+
+New files:
+
+| File | Contents |
+|---|---|
+| `src/ib_agent/data/filings.py` | `html_to_text` (strip inline XBRL, keep table text), `split_sections(text, accession) -> list[FilingSection]`, `chunk(section, max_tokens=1500) -> list[Chunk]` with IDs `{accession}:{item}:{n}` |
+| `src/ib_agent/models/narrative.py` | `Citation`, `BusinessOverview`, `RiskFactors`, `MDAHighlights`, `AssumptionAdjustments`, `PeerSuggestions`, `DeckNarrative`, `ReviewFindings` |
+| `src/ib_agent/llm/base.py` | `LLMProvider` protocol (§11.1), `LLMCallRecord(prompt_id, prompt_sha256, model, tokens_in, tokens_out)`, `structured_call(...)` with one repair retry |
+| `src/ib_agent/llm/{openai,anthropic,ollama,fake}_provider.py` | Providers. Ollama over `httpx`. Fake returns fixtures keyed by prompt ID |
+| `src/ib_agent/llm/prompts/*.md` | Versioned prompt templates with a front-matter `id` and `version` |
+| `src/ib_agent/llm/guardrails.py` | `extract_numbers`, `verify_numbers(text, facts, tol)`, `verify_citations(obj, chunks)`, untrusted-data delimiters |
+| `src/ib_agent/llm/budget.py` | Per-run caps on calls and tokens |
+| `src/ib_agent/agents/assumptions.py` | Applies LLM deltas, clamped to configured bounds; each delta requires a citation |
+| `src/ib_agent/agents/narrative.py` | Overview, risks, MD&A highlights, slide text |
+| `tests/fixtures/llm/*.json` | Canned responses per prompt ID |
+
+Tasks:
+
+- [ ] Section splitter per §7.2: tolerant `Item 1 / 1A / 7 / 7A / 8` regexes, skip TOC by taking the last heading followed by substantial text, fall back to facts-only narrative with a warning.
+- [ ] Provider factory from `LLM_PROVIDER` / `LLM_MODEL`; model names never hard-coded.
+- [ ] Native JSON / tool mode where available; always Pydantic-validated.
+- [ ] Guardrails per §11.3: number verification (regenerate once, then fail the step), citation IDs and verbatim quotes, untrusted-data delimiters, no tools, schema-only parsing.
+- [ ] Config: `llm.max_calls`, `llm.max_tokens`, `llm.temperature: 0`, and `llm.adjustment_bounds` per assumption field.
+- [ ] Peer suggestions feed Phase 6 validation.
+- [ ] Dependencies: `selectolax` (or `beautifulsoup4` + `lxml`); optional extras `[openai]`, `[anthropic]`. The Docker image installs both extras.
+- [ ] Compose `ollama` profile (if not already done in Phase 0).
+
+Tests:
+
+- [ ] Splitter picks the body, not the TOC, on the trimmed real 10-K.
+- [ ] Chunk IDs are stable across runs.
+- [ ] Every LLM task runs with `FakeProvider`.
+- [ ] Invented number in output is caught; invalid citation ID and non-verbatim quote are caught.
+- [ ] Filing text containing "ignore previous instructions ..." stays inside delimiters and doesn't change the output schema.
+- [ ] Out-of-bounds assumption deltas are clamped; deltas without citations are dropped.
+- [ ] Budget exceeded fails cleanly.
+
+**Exit criteria:** all LLM tasks pass offline with `FakeProvider`; one manual live run per real provider is recorded in the PR description.
+
+---
+
+### Phase 8 — Orchestrator, Manifest, Human Review
+
+**Status:** not started. **Goal:** one command runs the full pipeline, resumably, with a complete audit trail.
+
+New files:
+
+| File | Contents |
+|---|---|
+| `src/ib_agent/models/run.py` | `RunState`, `StepRecord(name, started_at, finished_at, inputs_sha256, status)`, `RunManifest` |
+| `src/ib_agent/agents/orchestrator.py` | Step registry and `run(state, *, from_step, force) -> RunState` |
+| `src/ib_agent/outputs/run_dir.py` | `new_run_dir(output_dir, ticker, now)` → `outputs/{TICKER}/{YYYYMMDD-HHMMSS}/`; `save_state` / `load_state` per step |
+| `src/ib_agent/outputs/manifest.py` | Writes `run_manifest.json` (§12.3) with artifact SHA-256 hashes, package version, git SHA if available |
+
+Step order (comps must come before valuation, because the exit multiple default comes from the peer median):
+
+`research → extraction → qa_gate → market_and_rates → comps → assumptions (baseline + LLM) → human_review → valuation → narrative → excel → parity → deck → pdf → review`
+
+Tasks:
+
+- [ ] Each step is `step(state) -> state`, records timing and an inputs hash, and saves `state/{step}.json`.
+- [ ] `--from-step` reloads saved state; `--force` ignores it.
+- [ ] `--no-llm` (or `LLM_PROVIDER=fake`) uses deterministic templated text; numbers never depend on the LLM.
+- [ ] `--review`: write `assumptions.yaml`, print a summary, wait for confirmation. On a non-TTY, exit with instructions to run `value --assumptions` later.
+- [ ] Run-dir paths come only from the validated ticker and a generated timestamp; reject anything else.
+- [ ] CLI: `analyze TICKER [--peers] [--review] [--no-llm] [--valuation-date] [--from-step] [--force] [--price] [--beta]`, `value TICKER --assumptions FILE`, `build RUN_DIR`.
+- [ ] Makefile `analyze` target now works.
+
+Tests:
+
+- [ ] Integration: `analyze <fixture> --no-llm` fully offline produces `model.xlsx` and `run_manifest.json`.
+- [ ] `--from-step valuation` reuses saved state and makes zero HTTP requests.
+- [ ] Manifest lists the tag and accession number for every extracted line item and every source URL.
+- [ ] `build RUN_DIR` rejects paths outside the output directory.
+
+**Exit criteria:** `ib-agent analyze <fixture> --no-llm` works end to end offline; the integration test passes in Docker.
+
+---
+
+### Phase 9 — Pitch Deck and PDF
+
+**Status:** not started. **Goal:** an editable 12-slide `deck.pptx` and a matching `deck.pdf`.
+
+New files:
+
+| File | Contents |
+|---|---|
+| `src/ib_agent/outputs/deck/template.pptx` | Clean 16:9 master with title, content, table, and chart layouts |
+| `src/ib_agent/outputs/deck/builder.py` | `build_deck(state, path) -> Path` |
+| `src/ib_agent/outputs/deck/charts.py` | Native charts: revenue / EBITDA bar + margin line; EV-to-equity waterfall (stacked bar with invisible base); football field (horizontal stacked bar with invisible offset plus a current-price line) |
+| `src/ib_agent/outputs/deck/tables.py` | UFCF, sensitivity, and comps tables with consistent formats |
+| `src/ib_agent/outputs/deck/slides/*.py` | One builder per slide in §12.2 |
+| `src/ib_agent/outputs/deck/text_templates.py` | Deterministic text for `--no-llm` |
+| `src/ib_agent/outputs/pdf.py` | `to_pdf(pptx) -> Path` via `soffice --headless --convert-to pdf` with timeout and isolated profile |
+
+Tasks:
+
+- [ ] All 12 slides from §12.2; citations as footnotes with accession numbers.
+- [ ] Football field bars: DCF (Gordon), DCF (exit), comps EV / EBITDA, EV / Revenue, P / E, 52-week range.
+- [ ] "Preliminary / not investment advice" disclaimer on the cover and appendix.
+- [ ] Dependencies: `python-pptx`; dev: `pypdf`.
+
+Tests:
+
+- [ ] Slide count is 12; key strings present (company name, per-share values, disclaimer).
+- [ ] Charts are native chart objects (`shape.has_chart`).
+- [ ] PDF page count matches (LibreOffice marker).
+- [ ] `--no-llm` deck has no empty placeholders.
+
+**Exit criteria:** `analyze` produces `deck.pptx` and `deck.pdf`; the deck is reviewed visually for 3 tickers.
+
+---
+
+### Phase 10 — Review Agent
+
+**Status:** not started. **Goal:** catch inconsistencies before a human sees the deck.
+
+New files: `src/ib_agent/models/review.py` (`ReviewFinding`, `ReviewReport`), `src/ib_agent/agents/review.py`, `src/ib_agent/outputs/review_report.py` (writes `review_report.md`).
+
+Tasks:
+
+- [ ] Deterministic checks: sanity flags (§9.7), QA summary, parity result, every number in deck text frames and tables matches the facts table, narrative slides have citations, disclaimer present on every artifact.
+- [ ] LLM "VP review" (advisory only; can't change numbers).
+- [ ] Summary added to the deck appendix.
+- [ ] CLI: `ib-agent verify RUN_DIR` re-runs parity and review on a saved run.
+
+Tests:
+
+- [ ] A wrong number seeded into slide text is caught.
+- [ ] A missing disclaimer is caught.
+- [ ] TV > 85% of EV and WACC outside [5%, 15%] are flagged.
+
+**Exit criteria:** seeded inconsistencies are caught; `verify` works on a saved run.
+
+---
+
+### Phase 11 — API and Polish (optional)
+
+**Status:** not started. **Goal:** trigger runs over HTTP and ship sample outputs.
+
+Tasks:
+
+- [ ] `src/ib_agent/api/app.py` (FastAPI): `POST /runs {ticker, peers, options}` → run ID; `GET /runs/{id}`; `GET /runs/{id}/artifacts/{name}`.
+- [ ] Validate the ticker with the same regex, validate run IDs against the generated format, and allow-list artifact names (`model.xlsx`, `deck.pptx`, `deck.pdf`, `run_manifest.json`, `review_report.md`) to prevent path traversal.
+- [ ] Bounded in-process worker pool; run status read from the run directory.
+- [ ] Compose `api` service under the `api` profile, bound to `127.0.0.1:8000` (no auth in v1).
+- [ ] Sample outputs for 3 tickers (software, consumer, industrial) in `samples/`.
+- [ ] Final README with screenshots; quickstart verified from a clean clone.
+- [ ] Dependencies: optional extra `[api]` with `fastapi`, `uvicorn`.
+
+Tests:
+
+- [ ] `TestClient`: create run (with a stubbed pipeline), poll status, download an allowed artifact, reject `../` and unknown artifact names.
+
+**Exit criteria:** the API works in Docker; the README quickstart works from a clean clone.
+
+---
 
 ### Stretch
 - Stub-period / partial-year discounting; quarterly LTM for all line items.
@@ -619,14 +1070,16 @@ Each milestone ends with passing tests in Docker (`make test`) and a short demo 
 | Large Docker image | Multi-stage build, `--no-install-recommends`, only calc + impress components |
 | SEC fair-access violations | Mandatory User-Agent, rate limiter below the 10 req/s limit, aggressive caching |
 | Output looks authoritative but is wrong | Checks sheet, review report, "preliminary / not investment advice" disclaimers on every artifact |
+| LibreOffice doesn't recalculate `.xlsx` on load | Force recalculation (profile setting or `calculateAll()` macro); a test asserts a known formula cell gets a value |
+| XBRL `fy` field mislabels comparative periods | Label periods by the fact's `end` date; dedicated unit test |
+| Synthetic fixtures hide real-world XBRL quirks | Record and trim a real fixture company in Phase 1; live tests (`-m live`) on 3 tickers |
 
 ---
 
-## 17. Separation into Its Own Repository Later
+## 17. Repository Independence
 
-To make the future move trivial:
+The project already lives in its own repository. Keep it that way:
 
-- No imports from `quant_backtester` or any path outside `ib/`.
-- All paths relative to `ib/`. Docker build context is `ib/`.
-- Own `pyproject.toml`, `README.md`, `.gitignore`, and `.dockerignore` inside `ib/`.
-- Moving later: `git subtree split --prefix=ib -b ib-agent` keeps history, then push the branch to a new repository.
+- No imports from other local projects; every path is relative to the repository root.
+- Docker build context is the repository root.
+- The repository has its own `pyproject.toml`, `README.md`, `.gitignore`, and `.dockerignore`.
