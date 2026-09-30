@@ -27,3 +27,7 @@ class UnsupportedCompanyError(IBAgentError):
 
 class FilingNotFoundError(IBAgentError):
     pass
+
+
+class ExtractionError(IBAgentError):
+    pass

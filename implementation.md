@@ -8,7 +8,7 @@ The project lives in its own repository (`ValuationAgent/`) and is fully self-co
 
 ## 0. Current Status (as of 2026-09-30)
 
-**Summary:** Phase 0 (scaffolding) and Phase 1 (EDGAR + research) are complete, except Phase 1 still needs a real-company fixture. Nothing from Phase 2 onward exists yet. The CLI has two commands: `version` and `fetch`. The detailed phase plan is in [§15](#15-phased-implementation-plan).
+**Summary:** Phase 0 (scaffolding), Phase 1 (EDGAR + research), and Phase 2 (statement extraction + QA) are complete. Phases 1 and 2 are verified against a synthetic fixture company; a recorded real-company fixture is still outstanding. Nothing from Phase 3 onward exists yet. The CLI has three commands: `version`, `fetch`, and `extract`. The detailed phase plan is in [§15](#15-phased-implementation-plan). Run instructions are in [HOW_TO_RUN.md](HOW_TO_RUN.md).
 
 ### 0.1 What Exists
 
@@ -16,7 +16,7 @@ The project lives in its own repository (`ValuationAgent/`) and is fully self-co
 |---|---|---|---|
 | Packaging and tooling | Done | `pyproject.toml` | Python ≥3.12; deps: `httpx`, `pydantic` v2, `pydantic-settings`, `pyyaml`, `tenacity`, `typer`. `ruff`, `mypy` (pydantic plugin), `pytest` with a `live` marker excluded by default |
 | Docker | Done for current phases | `Dockerfile`, `docker-compose.yml` | Multi-stage (`base` → `builder` → `runtime` → `dev`), non-root `analyst`, LibreOffice Calc + Impress, Liberation/DejaVu fonts. Services: `analyst`, `tests` (`network_mode: none`), `ollama` (`local-llm` profile). API service is deferred to Phase 11 |
-| Makefile | Partial | `Makefile` | `build`, `test`, `lint`, `fmt`, `fetch`, `local-llm`, `shell`. `analyze` calls a CLI command not implemented until Phase 8 |
+| Makefile | Partial | `Makefile` | `build`, `test`, `lint`, `fmt`, `fetch`, `extract`, `local-llm`, `shell`. `analyze` calls a CLI command not implemented until Phase 8 |
 | Settings and defaults | Done | `src/ib_agent/config.py`, `config/defaults.yaml` | Env settings (`SEC_USER_AGENT`, LLM vars, dirs). `edgar` and `valuation` YAML sections with field and cross-field bounds; unknown keys rejected |
 | Errors | Done | `src/ib_agent/errors.py` | `IBAgentError` hierarchy: config, ticker, EDGAR, unsupported company, filing not found |
 | HTTP cache | Done | `src/ib_agent/data/cache.py` | SHA-256-keyed file cache, TTL per call, atomic writes |
@@ -25,15 +25,16 @@ The project lives in its own repository (`ValuationAgent/`) and is fully self-co
 | Ticker resolution | Done | `src/ib_agent/data/tickers.py` | Regex validation, `BRK.B` → `BRK-B` handling |
 | Company models | Done | `src/ib_agent/models/company.py`, `models/sources.py` | `CompanyRef`, `FilingRef`, `CompanyProfile` (SIC 6000–6799 detection), `parse_submissions` |
 | Research agent | Done | `src/ib_agent/agents/research.py` | Ticker → CIK → submissions → refuse financials → latest 10-K (10-K/A excluded) + newer 10-Q → company facts → download filing HTML (downloaded, not parsed) |
-| CLI | Partial | `src/ib_agent/cli.py` | `version`, `fetch TICKER [--refresh]` |
-| Tests | Done for current scope | `tests/` | 8 unit files + 1 integration file covering cache, CLI, company parsing, config, EDGAR client, network guard, rate limiter, tickers, research flow. `FakeSEC` over `httpx.MockTransport`; socket connections blocked unless marked `live` |
-| Extraction, market data, rates, valuation, comps, LLM, orchestrator, Excel, deck, PDF, review, API | Not started | — | No `extraction/`, `valuation/`, `llm/`, `outputs/`, or `api/` packages |
-| `config/xbrl_tag_map.yaml`, `config/peers.yaml` | Not started | — | |
-| CI | Done | `.github/workflows/ci.yml` | Python 3.12; Ruff lint/format, mypy, and pytest |
+| Extraction + QA | Done | `config/xbrl_tag_map.yaml`, `src/ib_agent/extraction/`, `models/financials.py`, `models/qa.py`, `agents/extraction.py` | Ordered tag fallback with `sum_of` fallbacks, restatement dedup (latest `filed` wins), periods labelled by `end` date, FY + LTM roll-forward, outflow sign normalization, derived EBITDA / debt / NWC / tax rate / historical UFCF, 9 QA checks from §8.3 |
+| CLI | Partial | `src/ib_agent/cli.py` | `version`, `fetch TICKER [--refresh]`, `extract TICKER [--csv DIR] [--refresh]` (exit code 2 on QA failure) |
+| Tests | Done for current scope | `tests/` | 11 unit files + 2 integration files (105 tests). `FakeSEC` over `httpx.MockTransport`; socket connections blocked unless marked `live` |
+| Market data, rates, valuation, comps, LLM, orchestrator, Excel, deck, PDF, review, API | Not started | — | No `valuation/`, `llm/`, `outputs/`, or `api/` packages |
+| `config/peers.yaml` | Not started | — | |
+| CI | Removed | — | The workflow was removed in commit `b832411`; re-add `.github/workflows/ci.yml` (Ruff, mypy, pytest on Python 3.12) |
 
 ### 0.2 Known Gaps and Debt to Carry Forward
 
-1. **Fixture company is synthetic.** `companyfacts_CIK0000000001.json` has only a shares fact and one annual `Revenues` fact, and the 10-K/10-Q HTML fixtures are placeholders. Phase 2 needs a real, trimmed fixture company. (Phase 1.)
+1. **Fixture company is synthetic.** `companyfacts_CIK0000000001.json` (ACME) now has 4 fiscal years, a restatement, a tag switch, and Q1 YTD periods with a balance sheet that ties, which is enough to exercise Phase 2. The 10-K/10-Q HTML fixtures are still placeholders, and real-world XBRL quirks remain untested until a real company is recorded. (Phase 1.)
 2. **HTTP client is SEC-only.** `EdgarClient` hard-codes the SEC host allow-list, so Treasury / FRED / market data need a generalized cached client. (Phase 3.)
 3. **Research output isn't persisted.** `ResearchResult` lives in memory; there is no run directory yet. (Phase 8.)
 4. **Host Python is 3.9.** Use Docker or install Python 3.12 for the documented local setup.
@@ -591,7 +592,7 @@ Phases map one-to-one to the README roadmap (Phase N = MN). Every phase ends wit
 |---|---|---|---|
 | 0 | Scaffolding + Docker | Mostly done | `docker compose run --rm analyst --help` |
 | 1 | EDGAR client + Research agent | Done (fixture gap) | `ib-agent fetch MSFT` |
-| 2 | Statement extraction + QA | Not started | `ib-agent extract MSFT` |
+| 2 | Statement extraction + QA | Done (synthetic fixture) | `ib-agent extract MSFT` |
 | 3 | Market data, rates, beta, WACC | Not started | `ib-agent extract MSFT` (adds market + WACC section) |
 | 4 | Assumptions, forecast, DCF, sensitivities | Not started | `ib-agent value MSFT` |
 | 5 | Excel model + LibreOffice parity | Not started | `ib-agent value MSFT` (also writes `model.xlsx`) |
@@ -682,46 +683,57 @@ Remaining:
 
 ### Phase 2 — Financial Statement Extraction and QA
 
-**Status:** not started. **Goal:** company facts → normalized IS / BS / CF for up to 5 fiscal years plus LTM, each value traceable to a tag and accession number, gated by QA.
+**Status:** done against the synthetic ACME fixture; re-verify on the real fixture company once Phase 1 records it. **Goal:** company facts → normalized IS / BS / CF for up to 5 fiscal years plus LTM, each value traceable to a tag and accession number, gated by QA.
+
+As built (differences from the original plan):
+
+- The tag map has no `period_type` field: BS items are instants, IS / CF items are durations. It adds `ltm: roll_forward | latest` (weighted diluted shares use the latest YTD value). `sum_of` components are canonical items defined earlier or raw tags; `"-x"` subtracts and `"x?"` is optional.
+- `LineItemValue(value, method: tag | sum | ltm | derived, sources: list[FactRef], sign_flipped, formula)`. A list of sources replaces the single tag / accession so sums and LTM values stay traceable. Derived metrics are a fourth `Statement` rather than a separate `DerivedMetrics` model.
+- `QACheck.status` also allows `skip` (e.g. gross profit tie when gross profit is derived).
+- Outflow items are stored as absolute values with `sign_flipped` recorded; the sign check fails when an item's reported sign changes between periods.
+- CSV export uses the stdlib `csv` module, so `pandas` was not added.
+- Historical UFCF is computed for fiscal years only (it needs the prior year-end NWC); LTM UFCF is left blank.
+- Amounts are floats in raw USD. The display helper lives in `src/ib_agent/display.py`.
 
 New files:
 
 | File | Contents |
 |---|---|
-| `config/xbrl_tag_map.yaml` | Canonical line item → `statement` (`IS`/`BS`/`CF`), `period_type` (`duration`/`instant`), `unit` (`USD`/`shares`/`USD/shares`), `sign` (`as_reported`/`outflow_positive`), ordered candidate tags, optional `sum_of` fallback |
-| `src/ib_agent/models/financials.py` | `Fact`, `Period(label, start, end, kind: FY \| LTM \| YTD \| Q)`, `LineItemValue(value, tag, accession, form, filed, period)`, `Statement`, `FinancialStatements`, `DerivedMetrics` |
-| `src/ib_agent/models/qa.py` | `QACheck(id, severity: fail \| warn, status: pass \| warn \| fail, message, values)`, `QAReport(checks, passed)` |
-| `src/ib_agent/extraction/xbrl.py` | `load_tag_map(path)`, `tidy_facts(company_facts) -> list[Fact]` for the `us-gaap` and `dei` namespaces |
-| `src/ib_agent/extraction/statements.py` | `build_statements(facts, tag_map, *, history_years) -> FinancialStatements`, LTM roll-forward, derived items |
+| `config/xbrl_tag_map.yaml` | Canonical line item → `statement` (`IS`/`BS`/`CF`), `unit` (`USD`/`shares`/`USD/shares`), `sign` (`as_reported`/`outflow_positive`), `ltm`, ordered candidate tags, optional `sum_of` fallback |
+| `src/ib_agent/models/financials.py` | `Fact`, `Period(label, kind: FY \| YTD \| LTM, start, end)`, `FactRef`, `LineItemValue`, `Statement`, `FinancialStatements` |
+| `src/ib_agent/models/qa.py` | `QACheck(id, severity: fail \| warn, status: pass \| warn \| fail \| skip, message, values)`, `QAReport(checks, passed)` |
+| `src/ib_agent/extraction/xbrl.py` | `TagMap`, `load_tag_map(path)`, `tidy_facts(company_facts, tag_map) -> list[Fact]` for the `us-gaap` and `dei` namespaces |
+| `src/ib_agent/extraction/statements.py` | `build_statements(facts, tag_map, valuation_defaults) -> FinancialStatements`, LTM roll-forward, derived items |
 | `src/ib_agent/extraction/checks.py` | One function per QA check in §8.3; `run_qa(statements, profile, *, as_of) -> QAReport` |
-| `src/ib_agent/agents/extraction.py` | `run_extraction(research, defaults, tag_map) -> ExtractionResult(statements, qa)` |
+| `src/ib_agent/agents/extraction.py` | `run_extraction(research, defaults, tag_map, *, as_of) -> ExtractionResult(statements, qa)` |
+| `src/ib_agent/display.py` | $mm formatting, console tables, CSV export |
 
 Tasks:
 
-- [ ] Write the tag map for every canonical item in §8.1. Add `sum_of` fallbacks where companies split items (e.g. total debt = `LongTermDebtCurrent` + `LongTermDebtNoncurrent`; gross profit = revenue − cost of revenue).
-- [ ] `tidy_facts`: flatten `facts[ns][tag]["units"][unit]` into `Fact` rows (`tag, unit, value, start, end, fy, fp, form, filed, accn, frame`). Skip units not in the map.
-- [ ] Label fiscal periods by the fact's **`end` date**, not by the `fy` field. `fy` is the fiscal year of the *filing*, so comparative-period facts repeat under later `fy` values.
-- [ ] Period filters: FY duration 355–375 days from `10-K` / `10-K/A`; YTD durations of ~90 / ~180 / ~270 days from `10-Q`; instants matched on `end`.
-- [ ] Deduplicate by `(tag, unit, start, end)` and keep the latest `filed`, so restatements win.
-- [ ] Tag fallback per period: the first tag with a value for that period wins, and the winning tag is recorded on the `LineItemValue`.
-- [ ] LTM = latest FY + current YTD − prior-year YTD for duration items; latest 10-Q instant for balance sheet items. If no 10-Q is newer than the 10-K, LTM = latest FY.
-- [ ] Sign normalization: capex, acquisitions, dividends, and buybacks stored as positive outflows everywhere.
-- [ ] Derived items: EBITDA, total debt, net debt, NWC (excluding cash and debt), historical UFCF, effective tax rate.
-- [ ] Keep raw USD internally. Add a display helper for $mm formatting.
-- [ ] QA checks per §8.3 (BS balance, gross profit tie, EBITDA ≥ EBIT, CF tie, required items, ≥3 years of history, sign conventions, sector eligibility, stale data).
-- [ ] CLI: `ib-agent extract TICKER [--csv DIR] [--refresh]` prints IS / BS / CF in $mm and the QA table. Exit code 2 when any `fail` check fails.
-- [ ] Dependencies: `pandas` for CSV export and tabular display only; core extraction stays in plain Python / Pydantic.
+- [x] Write the tag map for every canonical item in §8.1. Add `sum_of` fallbacks where companies split items (e.g. short-term debt = `LongTermDebtCurrent` + `ShortTermBorrowings` + `CommercialPaper`; gross profit = revenue − cost of revenue).
+- [x] `tidy_facts`: flatten `facts[ns][tag]["units"][unit]` into `Fact` rows (`tag, unit, value, start, end, fy, fp, form, filed, accn, frame`). Skip units not in the map.
+- [x] Label fiscal periods by the fact's **`end` date**, not by the `fy` field. `fy` is the fiscal year of the *filing*, so comparative-period facts repeat under later `fy` values.
+- [x] Period filters: FY duration 355–375 days from `10-K` / `10-K/A`; YTD durations of ~90 / ~180 / ~270 days from `10-Q`; instants matched on `end`.
+- [x] Deduplicate by `(tag, unit, start, end)` and keep the latest `filed`, so restatements win.
+- [x] Tag fallback per period: the first tag with a value for that period wins, and the winning tag is recorded on the `LineItemValue`.
+- [x] LTM = latest FY + current YTD − prior-year YTD for duration items; latest 10-Q instant for balance sheet items. If no 10-Q is newer than the 10-K, LTM = latest FY.
+- [x] Sign normalization: capex, acquisitions, dividends, and buybacks stored as positive outflows everywhere.
+- [x] Derived items: EBITDA, total debt, net debt, NWC (excluding cash and debt), historical UFCF, effective tax rate.
+- [x] Keep raw USD internally. Add a display helper for $mm formatting.
+- [x] QA checks per §8.3 (BS balance, gross profit tie, EBITDA ≥ EBIT, CF tie, required items, ≥3 years of history, sign conventions, sector eligibility, stale data).
+- [x] CLI: `ib-agent extract TICKER [--csv DIR] [--refresh]` prints IS / BS / CF in $mm and the QA table. Exit code 2 when any `fail` check fails.
+- [x] Dependencies: none added (stdlib `csv` instead of `pandas`).
 
 Tests:
 
-- [ ] `tidy_facts` on a synthetic payload with mixed units and namespaces.
-- [ ] Tag fallback, including a period where the primary tag is missing.
-- [ ] Restatement: two facts for the same period, the later `filed` wins.
-- [ ] The `fy` trap: a comparative fact filed under a later `fy` lands in the right period.
-- [ ] Duration filter drops quarterly facts from FY.
-- [ ] LTM roll-forward worked by hand.
-- [ ] Each QA check: one pass case, one fail case.
-- [ ] Integration: fixture company end to end. Hard-code 10 line items from its 10-K and assert equality.
+- [x] `tidy_facts` on a synthetic payload with mixed units and namespaces.
+- [x] Tag fallback, including a period where the primary tag is missing.
+- [x] Restatement: two facts for the same period, the later `filed` wins.
+- [x] The `fy` trap: a comparative fact filed under a later `fy` lands in the right period.
+- [x] Duration filter drops quarterly facts from FY.
+- [x] LTM roll-forward worked by hand.
+- [x] Each QA check: one pass case, one fail case.
+- [x] Integration: fixture company end to end, 16 spot-checked values plus derived metrics (synthetic ACME; repeat with the real fixture company).
 
 **Exit criteria:** `ib-agent extract <fixture>` prints 3–5 years of IS / BS / CF matching the 10-K on the 10 spot-checked items; all QA checks pass for the fixture company.
 

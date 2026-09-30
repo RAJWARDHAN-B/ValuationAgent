@@ -1,0 +1,188 @@
+# Canonical line item -> ordered candidate XBRL tags (us-gaap unless prefixed, e.g. "dei:").
+# For each period, the first tag with a value wins and is recorded as the source.
+#
+# Fields:
+#   statement  IS | BS | CF (BS items are instants; IS / CF items are durations)
+#   unit       USD (default) | shares | USD/shares
+#   sign       as_reported (default) | outflow_positive (cash outflows stored as positive)
+#   ltm        roll_forward (default: FY + YTD - prior YTD) | latest (current YTD value)
+#   sum_of     fallback when no tag has a value: canonical items defined above or raw tags.
+#              "-" prefix subtracts; "?" suffix marks an optional component (quote both in
+#              YAML). At least one component must be present.
+
+# ---- Income statement ----
+revenue:
+  statement: IS
+  tags:
+    - RevenueFromContractWithCustomerExcludingAssessedTax
+    - Revenues
+    - SalesRevenueNet
+    - RevenueFromContractWithCustomerIncludingAssessedTax
+cost_of_revenue:
+  statement: IS
+  tags: [CostOfRevenue, CostOfGoodsAndServicesSold, CostOfGoodsSold, CostOfServices]
+gross_profit:
+  statement: IS
+  tags: [GrossProfit]
+  sum_of: [revenue, "-cost_of_revenue"]
+research_development:
+  statement: IS
+  tags:
+    - ResearchAndDevelopmentExpense
+    - ResearchAndDevelopmentExpenseExcludingAcquiredInProcessCost
+sga:
+  statement: IS
+  tags: [SellingGeneralAndAdministrativeExpense]
+  sum_of: [SellingAndMarketingExpense, GeneralAndAdministrativeExpense]
+operating_income:
+  statement: IS
+  tags: [OperatingIncomeLoss]
+interest_expense:
+  statement: IS
+  tags: [InterestExpense, InterestExpenseNonoperating, InterestExpenseDebt]
+pretax_income:
+  statement: IS
+  tags:
+    - IncomeLossFromContinuingOperationsBeforeIncomeTaxesExtraordinaryItemsNoncontrollingInterest
+    - IncomeLossFromContinuingOperationsBeforeIncomeTaxesMinorityInterestAndIncomeLossFromEquityMethodInvestments
+income_tax_expense:
+  statement: IS
+  tags: [IncomeTaxExpenseBenefit]
+net_income:
+  statement: IS
+  tags: [NetIncomeLoss, ProfitLoss]
+eps_diluted:
+  statement: IS
+  unit: USD/shares
+  tags: [EarningsPerShareDiluted]
+diluted_shares:
+  statement: IS
+  unit: shares
+  ltm: latest
+  tags: [WeightedAverageNumberOfDilutedSharesOutstanding]
+
+# ---- Balance sheet ----
+cash:
+  statement: BS
+  tags:
+    - CashAndCashEquivalentsAtCarryingValue
+    - CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents
+short_term_investments:
+  statement: BS
+  tags:
+    - ShortTermInvestments
+    - MarketableSecuritiesCurrent
+    - AvailableForSaleSecuritiesDebtSecuritiesCurrent
+receivables:
+  statement: BS
+  tags: [AccountsReceivableNetCurrent, ReceivablesNetCurrent]
+inventory:
+  statement: BS
+  tags: [InventoryNet]
+total_current_assets:
+  statement: BS
+  tags: [AssetsCurrent]
+ppe_net:
+  statement: BS
+  tags:
+    - PropertyPlantAndEquipmentNet
+    - PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization
+goodwill:
+  statement: BS
+  tags: [Goodwill]
+intangibles:
+  statement: BS
+  tags: [IntangibleAssetsNetExcludingGoodwill, FiniteLivedIntangibleAssetsNet]
+total_assets:
+  statement: BS
+  tags: [Assets]
+accounts_payable:
+  statement: BS
+  tags: [AccountsPayableCurrent]
+total_current_liabilities:
+  statement: BS
+  tags: [LiabilitiesCurrent]
+short_term_debt:
+  statement: BS
+  tags: [DebtCurrent, LongTermDebtAndCapitalLeaseObligationsCurrent]
+  sum_of: ["LongTermDebtCurrent?", "ShortTermBorrowings?", "CommercialPaper?"]
+long_term_debt:
+  statement: BS
+  tags: [LongTermDebtNoncurrent, LongTermDebtAndCapitalLeaseObligations]
+operating_lease_liabilities:
+  statement: BS
+  tags: [OperatingLeaseLiability]
+  sum_of: ["OperatingLeaseLiabilityCurrent?", "OperatingLeaseLiabilityNoncurrent?"]
+noncontrolling_interest:
+  statement: BS
+  tags: [MinorityInterest]
+preferred_stock:
+  statement: BS
+  tags: [PreferredStockValue]
+stockholders_equity:
+  statement: BS
+  tags: [StockholdersEquity]
+total_equity:
+  statement: BS
+  tags: [StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest]
+  sum_of: [stockholders_equity, "noncontrolling_interest?"]
+total_liabilities:
+  statement: BS
+  tags: [Liabilities]
+  sum_of: [LiabilitiesAndStockholdersEquity, "-total_equity"]
+
+# ---- Cash flow ----
+cfo:
+  statement: CF
+  tags: [NetCashProvidedByUsedInOperatingActivities]
+depreciation_amortization:
+  statement: CF
+  tags:
+    - DepreciationDepletionAndAmortization
+    - DepreciationAndAmortization
+    - DepreciationAmortizationAndAccretionNet
+  sum_of: [Depreciation, "AmortizationOfIntangibleAssets?"]
+stock_based_compensation:
+  statement: CF
+  tags: [ShareBasedCompensation, AllocatedShareBasedCompensationExpense]
+change_in_receivables:
+  statement: CF
+  tags: [IncreaseDecreaseInAccountsReceivable]
+change_in_inventories:
+  statement: CF
+  tags: [IncreaseDecreaseInInventories]
+change_in_payables:
+  statement: CF
+  tags: [IncreaseDecreaseInAccountsPayable]
+capex:
+  statement: CF
+  sign: outflow_positive
+  tags: [PaymentsToAcquirePropertyPlantAndEquipment, PaymentsToAcquireProductiveAssets]
+acquisitions:
+  statement: CF
+  sign: outflow_positive
+  tags: [PaymentsToAcquireBusinessesNetOfCashAcquired]
+dividends:
+  statement: CF
+  sign: outflow_positive
+  tags: [PaymentsOfDividendsCommonStock, PaymentsOfDividends]
+buybacks:
+  statement: CF
+  sign: outflow_positive
+  tags: [PaymentsForRepurchaseOfCommonStock]
+cfi:
+  statement: CF
+  tags: [NetCashProvidedByUsedInInvestingActivities]
+cff:
+  statement: CF
+  tags: [NetCashProvidedByUsedInFinancingActivities]
+fx_effect:
+  statement: CF
+  tags:
+    - EffectOfExchangeRateOnCashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents
+    - EffectOfExchangeRateOnCashAndCashEquivalents
+net_change_in_cash:
+  statement: CF
+  tags:
+    - CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalentsPeriodIncreaseDecreaseIncludingExchangeRateEffect
+    - CashAndCashEquivalentsPeriodIncreaseDecrease

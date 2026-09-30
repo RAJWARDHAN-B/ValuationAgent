@@ -1,6 +1,6 @@
 # IB Analyst Agent
 
-> **Status (2026-09-30): early development.** The project setup and SEC EDGAR research path are implemented. `ib-agent fetch` resolves a ticker, screens financial-sector companies, retrieves company facts and recent filings, and caches responses. Statement extraction, valuation, Excel, deck, and API generation are planned but not implemented yet. See [implementation.md](implementation.md) for the verified status and phased plan.
+> **Status (2026-09-30): early development.** The SEC EDGAR research path and financial statement extraction are implemented. `ib-agent fetch` resolves a ticker, screens financial-sector companies, retrieves company facts and recent filings, and caches responses. `ib-agent extract` builds the income statement, balance sheet, and cash flow statement (fiscal years + LTM) from XBRL and runs QA checks. Valuation, Excel, deck, and API generation are planned but not implemented yet. See [HOW_TO_RUN.md](HOW_TO_RUN.md) to run it and [implementation.md](implementation.md) for the verified status and phased plan.
 
 The planned end state is a ticker-in, valuation package producing what a junior investment banking analyst would spend a weekend building:
 
@@ -53,12 +53,15 @@ make fetch T=MSFT
 # A repeat uses cached responses
 make fetch T=MSFT
 
+# Statements (FY + LTM) and QA checks
+make extract T=MSFT
+
 # Tests and lint run in the Python 3.12 container
 make test
 make lint
 ```
 
-The current CLI commands are `ib-agent --help`, `ib-agent version`, and `ib-agent fetch TICKER [--refresh]`. `fetch` requires `SEC_USER_AGENT`; `--refresh` bypasses cached metadata.
+The current CLI commands are `ib-agent --help`, `ib-agent version`, `ib-agent fetch TICKER [--refresh]`, and `ib-agent extract TICKER [--csv DIR] [--refresh]`. Both data commands require `SEC_USER_AGENT`; `--refresh` bypasses cached metadata. `extract` exits with code 2 when a QA check fails.
 
 ### Optional Local Python Setup
 
@@ -96,13 +99,13 @@ Implemented:
 ```
 ib-agent version
 ib-agent fetch TICKER [--refresh]
+ib-agent extract TICKER [--csv DIR] [--refresh]   # statements + QA report
 ```
 
 Planned:
 
 ```
 ib-agent analyze TICKER [--peers A,B,C] [--review] [--no-llm] [--valuation-date YYYY-MM-DD]
-ib-agent extract TICKER                     # statements + QA report
 ib-agent value   TICKER --assumptions FILE  # valuation from edited assumptions
 ib-agent build   RUN_DIR                    # rebuild Excel / PPTX / PDF
 ib-agent verify  RUN_DIR                    # re-run parity and review checks
