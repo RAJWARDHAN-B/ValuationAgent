@@ -8,7 +8,7 @@ The project lives in its own repository (`ValuationAgent/`) and is fully self-co
 
 ## 0. Current Status (as of 2026-09-30)
 
-**Summary:** Phase 0 (scaffolding), Phase 1 (EDGAR + research), and Phase 2 (statement extraction + QA) are complete. Phases 1 and 2 are verified against a synthetic fixture company; a recorded real-company fixture is still outstanding. Nothing from Phase 3 onward exists yet. The CLI has three commands: `version`, `fetch`, and `extract`. The detailed phase plan is in [§15](#15-phased-implementation-plan). Run instructions are in [HOW_TO_RUN.md](HOW_TO_RUN.md).
+**Summary:** Phases 0–2 are complete, and Phase 3 is in progress. Phase 3 now has a shared cached HTTP transport plus unit-tested beta and WACC calculations; market/rate providers, share sourcing, and CLI integration remain outstanding. Phases 1 and 2 are verified against a synthetic fixture company; a recorded real-company fixture is still outstanding. The CLI has three commands: `version`, `fetch`, and `extract`. The detailed phase plan is in [§15](#15-phased-implementation-plan). Run instructions are in [HOW_TO_RUN.md](HOW_TO_RUN.md).
 
 ### 0.1 What Exists
 
@@ -18,24 +18,25 @@ The project lives in its own repository (`ValuationAgent/`) and is fully self-co
 | Docker | Done for current phases | `Dockerfile`, `docker-compose.yml` | Multi-stage (`base` → `builder` → `runtime` → `dev`), non-root `analyst`, LibreOffice Calc + Impress, Liberation/DejaVu fonts. Services: `analyst`, `tests` (`network_mode: none`), `ollama` (`local-llm` profile). API service is deferred to Phase 11 |
 | Makefile | Partial | `Makefile` | `build`, `test`, `lint`, `fmt`, `fetch`, `extract`, `local-llm`, `shell`. `analyze` calls a CLI command not implemented until Phase 8 |
 | Settings and defaults | Done | `src/ib_agent/config.py`, `config/defaults.yaml` | Env settings (`SEC_USER_AGENT`, LLM vars, dirs). `edgar` and `valuation` YAML sections with field and cross-field bounds; unknown keys rejected |
-| Errors | Done | `src/ib_agent/errors.py` | `IBAgentError` hierarchy: config, ticker, EDGAR, unsupported company, filing not found |
+| Errors | Done | `src/ib_agent/errors.py` | `IBAgentError` hierarchy: config, ticker, HTTP, EDGAR, unsupported company, filing not found |
 | HTTP cache | Done | `src/ib_agent/data/cache.py` | SHA-256-keyed file cache, TTL per call, atomic writes |
 | Rate limiter | Done | `src/ib_agent/data/rate_limit.py` | Minimum-interval limiter (default 5 req/s). Not a token bucket; acceptable at SEC volumes |
-| EDGAR client | Done | `src/ib_agent/data/edgar.py` | Mandatory User-Agent, host allow-list (`www.sec.gov`, `data.sec.gov`, HTTPS only), retries on 429/5xx/transport errors with jittered backoff, 24 h metadata TTL, filing documents cached forever, `SourceRecord` per retrieval |
+| HTTP transport and EDGAR client | Done for transport extraction | `src/ib_agent/data/http.py`, `src/ib_agent/data/edgar.py` | Configurable HTTPS host allow-list, retries, cache, rate limiter, and source records; EDGAR wrapper retains mandatory User-Agent and SEC-only policy |
 | Ticker resolution | Done | `src/ib_agent/data/tickers.py` | Regex validation, `BRK.B` → `BRK-B` handling |
 | Company models | Done | `src/ib_agent/models/company.py`, `models/sources.py` | `CompanyRef`, `FilingRef`, `CompanyProfile` (SIC 6000–6799 detection), `parse_submissions` |
 | Research agent | Done | `src/ib_agent/agents/research.py` | Ticker → CIK → submissions → refuse financials → latest 10-K (10-K/A excluded) + newer 10-Q → company facts → download filing HTML (downloaded, not parsed) |
 | Extraction + QA | Done | `config/xbrl_tag_map.yaml`, `src/ib_agent/extraction/`, `models/financials.py`, `models/qa.py`, `agents/extraction.py` | Ordered tag fallback with `sum_of` fallbacks, restatement dedup (latest `filed` wins), periods labelled by `end` date, FY + LTM roll-forward, outflow sign normalization, derived EBITDA / debt / NWC / tax rate / historical UFCF, 9 QA checks from §8.3 |
 | CLI | Partial | `src/ib_agent/cli.py` | `version`, `fetch TICKER [--refresh]`, `extract TICKER [--csv DIR] [--refresh]` (exit code 2 on QA failure) |
-| Tests | Done for current scope | `tests/` | 11 unit files + 2 integration files (105 tests). `FakeSEC` over `httpx.MockTransport`; socket connections blocked unless marked `live` |
-| Market data, rates, valuation, comps, LLM, orchestrator, Excel, deck, PDF, review, API | Not started | — | No `valuation/`, `llm/`, `outputs/`, or `api/` packages |
+| Beta and WACC calculations | Phase 3 groundwork | `src/ib_agent/valuation/beta.py`, `valuation/wacc.py` | OLS beta, Blume adjustment, unlever/relever, cost of debt, capital weights, WACC; not yet connected to market data or CLI |
+| Tests | Done for current scope | `tests/` | 14 unit files + 2 integration files (114 tests). `FakeSEC` over `httpx.MockTransport`; socket connections blocked unless marked `live` |
+| Market/rate providers, shares, valuation engine, comps, LLM, orchestrator, Excel, deck, PDF, review, API | Not started | — | No market/rates providers or end-to-end valuation pipeline yet |
 | `config/peers.yaml` | Not started | — | |
 | CI | Removed | — | The workflow was removed in commit `b832411`; re-add `.github/workflows/ci.yml` (Ruff, mypy, pytest on Python 3.12) |
 
 ### 0.2 Known Gaps and Debt to Carry Forward
 
 1. **Fixture company is synthetic.** `companyfacts_CIK0000000001.json` (ACME) now has 4 fiscal years, a restatement, a tag switch, and Q1 YTD periods with a balance sheet that ties, which is enough to exercise Phase 2. The 10-K/10-Q HTML fixtures are still placeholders, and real-world XBRL quirks remain untested until a real company is recorded. (Phase 1.)
-2. **HTTP client is SEC-only.** `EdgarClient` hard-codes the SEC host allow-list, so Treasury / FRED / market data need a generalized cached client. (Phase 3.)
+2. **External data providers are not implemented.** The reusable transport now takes a configurable host allow-list, but Treasury / FRED and market-data integrations remain Phase 3 work.
 3. **Research output isn't persisted.** `ResearchResult` lives in memory; there is no run directory yet. (Phase 8.)
 4. **Host Python is 3.9.** Use Docker or install Python 3.12 for the documented local setup.
 
@@ -593,7 +594,7 @@ Phases map one-to-one to the README roadmap (Phase N = MN). Every phase ends wit
 | 0 | Scaffolding + Docker | Mostly done | `docker compose run --rm analyst --help` |
 | 1 | EDGAR client + Research agent | Done (fixture gap) | `ib-agent fetch MSFT` |
 | 2 | Statement extraction + QA | Done (synthetic fixture) | `ib-agent extract MSFT` |
-| 3 | Market data, rates, beta, WACC | Not started | `ib-agent extract MSFT` (adds market + WACC section) |
+| 3 | Market data, rates, beta, WACC | In progress | `ib-agent extract MSFT` (adds market + WACC section) |
 | 4 | Assumptions, forecast, DCF, sensitivities | Not started | `ib-agent value MSFT` |
 | 5 | Excel model + LibreOffice parity | Not started | `ib-agent value MSFT` (also writes `model.xlsx`) |
 | 6 | Trading comps | Not started | `ib-agent value MSFT --peers AAPL,ORCL,CRM` |
@@ -741,7 +742,15 @@ Tests:
 
 ### Phase 3 — Market Data, Risk-Free Rate, Beta, WACC
 
-**Status:** not started. **Goal:** everything needed for the discount rate, with sources recorded.
+**Status:** in progress. **Goal:** everything needed for the discount rate, with sources recorded.
+
+Implemented groundwork:
+
+- [x] Extracted `CachedHttpClient` with configurable HTTPS host allow-list, caching, retries, rate limiting, and source records. `EdgarClient` delegates to it and keeps its SEC policy and public API; EDGAR regression tests pass.
+- [x] Added beta regression, Blume adjustment, and Hamada unlever / relever functions, plus cost-of-debt and WACC calculations with intermediate values.
+- [x] Added hand-check tests for beta, leverage adjustments, cost-of-debt clipping, and WACC weights.
+
+Still needed for Phase 3 exit criteria: market and Treasury providers, date-aligned return sampling, XBRL-first shares, configuration, CLI integration, and source/as-of display.
 
 New and changed files:
 
@@ -758,22 +767,22 @@ New and changed files:
 
 Tasks:
 
-- [ ] Generalize the HTTP client without changing EDGAR behavior.
+- [x] Generalize the HTTP client without changing EDGAR behavior.
 - [ ] Market provider behind the interface; yfinance is never imported outside `market.py`.
 - [ ] Treasury 10Y lookup with weekend / holiday fallback to the prior business day. Pin the exact CSV endpoint in `rates.py` and record a fixture.
-- [ ] Beta: monthly (default) or weekly returns, aligned dates, OLS slope, Blume adjustment `0.67 β + 0.33`. yfinance beta shown only as a cross-check.
-- [ ] Cost of debt: interest expense / average total debt, clipped to `[r_f, r_f + max_spread]`. Near-zero debt uses `r_f + no_debt_spread`.
-- [ ] Weights: market equity (price × diluted shares) and book debt (optionally plus operating leases).
+- [ ] Beta: monthly (default) or weekly returns, aligned dates, OLS slope, Blume adjustment `0.67 β + 0.33`. yfinance beta shown only as a cross-check. (Regression and adjustment math are implemented; date alignment/provider integration remain.)
+- [x] Cost of debt: interest expense / average total debt, clipped to `[r_f, r_f + max_spread]`. Near-zero debt uses `r_f + no_debt_spread`.
+- [x] Weights: market equity (price × diluted shares) and book debt (optionally plus operating leases).
 - [ ] CLI: `extract` gains a "Market and WACC" section. Add `--price`, `--beta`, and `--valuation-date` overrides.
 - [ ] Turn on `mypy --strict` for `ib_agent.valuation.*` in `pyproject.toml`.
 - [ ] Dependencies: `numpy`, `yfinance`.
 
 Tests:
 
-- [ ] Beta on a synthetic series with a known slope (e.g. asset = 1.3 × market + noise).
-- [ ] Blume, unlever / relever round trip.
-- [ ] Cost of debt clipping (both bounds) and the zero-debt case.
-- [ ] WACC by hand on round numbers.
+- [x] Beta on a synthetic series with a known slope (e.g. asset = 1.3 × market + noise).
+- [x] Blume, unlever / relever round trip.
+- [x] Cost of debt clipping (both bounds) and the zero-debt case.
+- [x] WACC by hand on round numbers.
 - [ ] Treasury CSV parsing from a fixture, including a holiday date.
 - [ ] Shares fallback order and the approximation flag.
 - [ ] `YFinanceProvider` tested with a monkeypatched download and recorded CSV (no network).

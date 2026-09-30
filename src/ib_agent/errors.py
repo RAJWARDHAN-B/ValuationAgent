@@ -21,6 +21,10 @@ class EdgarError(IBAgentError):
     pass
 
 
+class HttpClientError(IBAgentError):
+    pass
+
+
 class UnsupportedCompanyError(IBAgentError):
     pass
 
